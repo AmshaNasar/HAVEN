@@ -46,7 +46,7 @@ The demo holdings are real tickers: VT, FUTU (Futu Holdings, a Chinese fintech b
 - An append-only audit log of every change.
 - The page pins supabase-js with a subresource-integrity hash and sets a Content-Security-Policy that only allows connections to Supabase.
 
-38 automated security tests cover this (`supabase test db`).
+41 automated security tests cover this (`supabase test db`).
 
 ## For the owner: setting up the backend (about 10 minutes, all in the browser)
 
@@ -72,10 +72,14 @@ select private.schedule_market_refresh('https://<ref>.supabase.co/functions/v1/m
 Prices, FX and net-worth snapshots then refresh every 15 minutes even when nobody has the page open. Both values are stored in Vault, not in the job text.
 
 ### Already ran an older setup.sql?
-Run [`upgrade-1.sql`](upgrade-1.sql) once instead of setup.sql. It is safe to run twice.
+Run [`upgrade-1.sql`](upgrade-1.sql) instead of setup.sql. It is safe to run more than once.
+Its last line — the `schedule_market_refresh` call — is left commented out on purpose: run it
+separately, on its own, with your project ref and your real `CRON_SECRET` filled in. The SQL
+Editor runs a pasted script as one transaction, so a bad value there would roll back the whole
+upgrade.
 
 ### 5. Connect the dashboard
-Supabase dashboard → **Project Settings → API**. Copy the **Project URL** and the **publishable (anon) key**, and paste them into `HAVEN_CONFIG` near the top of the script in `haven-dashboard/index.html`. Both are meant to be public; the database's security rules protect the data. **Never paste the secret or service_role key into the page.**
+Supabase dashboard → **Project Settings → API**. Copy the **Project URL** and the **publishable (anon) key**, and paste them into `HAVEN_CONFIG` near the top of the script in `dashboard/index.html`. Both are meant to be public; the database's security rules protect the data. **Never paste the secret or service_role key into the page.**
 
 ### 6. Lock down sign-in
 In **Authentication**:

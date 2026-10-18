@@ -21,6 +21,9 @@ const ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") ?? "*").split(",").map((s) => s
 
 const QUOTE_TTL = 60e3, RATINGS_TTL = 12 * 3600e3, HISTORY_TTL = 12 * 3600e3, FX_TTL = 6 * 3600e3;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// How many distinct symbols one run may price. Anything past the cap is reported
+// back in "errors" rather than silently left without a price.
+const CRON_LIMIT = 50, USER_LIMIT = 25;
 const TICKER = /^[A-Z0-9][A-Z0-9.\-]{0,11}$/;
 
 function cors(req: Request) {
@@ -157,44 +160,63 @@ async function finishHousehold(householdId: string, refreshed: number) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors(req) });
-  if (req.method !== "POST") return json(req, { error: "POST only" }, 405);
+  try {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: cors(req) });
+    if (req.method !== "POST") return json(req, { error: "POST only" }, 405);
 
-  let body: any = {};
-  try { body = await req.json(); } catch { /* empty body */ }
+    let body: any = {};
+    try { body = await req.json(); } catch { /* empty body */ }
 
-  // Scheduled run from pg_cron: every household, authorised by the shared secret.
-  const cronHeader = req.headers.get("x-haven-cron") ?? "";
-  if (cronHeader) {
-    if (!CRON_SECRET || !sameSecret(cronHeader, CRON_SECRET)) return json(req, { error: "bad cron secret" }, 401);
-    const houses: { id: string; currency: string }[] = await rest(SERVICE, "households?select=id,currency");
-    const held: { household_id: string; symbol: string }[] = await rest(SERVICE, "holdings?select=household_id,symbol");
-    const symbols = [...new Set(held.map((h) => h.symbol))].filter((s) => TICKER.test(s)).slice(0, 50);
-    const { refreshed, errors } = await refresh(symbols, [...new Set(houses.map((h) => h.currency))]);
-    for (const h of houses) {
-      const n = held.filter((x) => x.household_id === h.id).length;
-      try { await finishHousehold(h.id, refreshed ? n : 0); } catch (e) { errors.push(`snapshot ${h.id}: ${(e as Error).message}`); }
+    // Scheduled run from pg_cron: every household, authorised by the shared secret.
+    const cronHeader = req.headers.get("x-haven-cron") ?? "";
+    if (cronHeader) {
+      if (!CRON_SECRET || !sameSecret(cronHeader, CRON_SECRET)) return json(req, { error: "bad cron secret" }, 401);
+      const houses: { id: string; currency: string }[] = await rest(SERVICE, "households?select=id,currency");
+      const held: { household_id: string; symbol: string }[] = await rest(SERVICE, "holdings?select=household_id,symbol");
+      const all = [...new Set(held.map((h) => h.symbol))].filter((s) => TICKER.test(s));
+      const symbols = all.slice(0, CRON_LIMIT);
+      const { refreshed, errors } = await refresh(symbols, [...new Set(houses.map((h) => h.currency))]);
+      // Say so rather than leaving the extra holdings unpriced and unexplained.
+      if (all.length > symbols.length) {
+        errors.push(`only the first ${CRON_LIMIT} of ${all.length} symbols were refreshed this run: ${all.slice(CRON_LIMIT).join(", ")} were skipped`);
+      }
+      for (const h of houses) {
+        // Count only this household's holdings that were actually refreshed this run.
+        const n = refreshed
+          ? [...new Set(held.filter((x) => x.household_id === h.id).map((x) => x.symbol))].filter((s) => symbols.includes(s)).length
+          : 0;
+        try { await finishHousehold(h.id, n); } catch (e) { errors.push(`snapshot ${h.id}: ${(e as Error).message}`); }
+      }
+      return json(req, { mode: "cron", households: houses.length, symbols, refreshed, errors });
     }
-    return json(req, { mode: "cron", households: houses.length, symbols, refreshed, errors });
+
+    // A signed-in user opening the dashboard.
+    const auth = req.headers.get("Authorization") ?? "";
+    if (!auth.startsWith("Bearer ")) return json(req, { error: "sign in first" }, 401);
+    const householdId = String(body.household_id ?? "");
+    if (!UUID.test(householdId)) return json(req, { error: "household_id must be a uuid" }, 400);
+
+    const jwt = auth.slice(7);
+    const who = await fetch(`${SB_URL}/auth/v1/user`, { headers: { apikey: ANON, Authorization: auth } });
+    if (!who.ok) return json(req, { error: "sign in first" }, 401);
+
+    // Membership is checked through RLS with the caller's own token: a non-member gets no rows.
+    const [house] = await rest(jwt, `households?id=eq.${householdId}&select=currency`);
+    if (!house) return json(req, { error: "not a member of this household" }, 403);
+    const held: { symbol: string }[] = await rest(jwt, `holdings?household_id=eq.${householdId}&select=symbol`);
+    const all = [...new Set(held.map((h) => h.symbol))].filter((s) => TICKER.test(s));
+    const symbols = all.slice(0, USER_LIMIT);
+
+    const { refreshed, errors } = await refresh(symbols, [house.currency]);
+    if (all.length > symbols.length) {
+      errors.push(`only the first ${USER_LIMIT} of ${all.length} holdings are priced per request: ${all.slice(USER_LIMIT).join(", ")} were skipped`);
+    }
+    await finishHousehold(householdId, refreshed);
+    return json(req, { symbols, refreshed, errors });
+  } catch (e) {
+    // Without this the runtime returns a bare 500 with no CORS headers, and the
+    // browser reports an opaque network failure instead of the reason.
+    console.error("market:", e);
+    return json(req, { error: `market data is temporarily unavailable: ${(e as Error).message}` }, 500);
   }
-
-  // A signed-in user opening the dashboard.
-  const auth = req.headers.get("Authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) return json(req, { error: "sign in first" }, 401);
-  const householdId = String(body.household_id ?? "");
-  if (!UUID.test(householdId)) return json(req, { error: "household_id must be a uuid" }, 400);
-
-  const jwt = auth.slice(7);
-  const who = await fetch(`${SB_URL}/auth/v1/user`, { headers: { apikey: ANON, Authorization: auth } });
-  if (!who.ok) return json(req, { error: "sign in first" }, 401);
-
-  // Membership is checked through RLS with the caller's own token: a non-member gets no rows.
-  const [house] = await rest(jwt, `households?id=eq.${householdId}&select=currency`);
-  if (!house) return json(req, { error: "not a member of this household" }, 403);
-  const held: { symbol: string }[] = await rest(jwt, `holdings?household_id=eq.${householdId}&select=symbol`);
-  const symbols = [...new Set(held.map((h) => h.symbol))].filter((s) => TICKER.test(s)).slice(0, 25);
-
-  const { refreshed, errors } = await refresh(symbols, [house.currency]);
-  await finishHousehold(householdId, refreshed);
-  return json(req, { symbols, refreshed, errors });
 });

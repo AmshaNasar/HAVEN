@@ -608,6 +608,10 @@ const dayDiff = d => Math.round((sd(d) - TODAY0) / 86400000);
 const fdate = d => new Date(d).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
 const iso = d => { const x = new Date(d); return `${x.getFullYear()}-${pad(x.getMonth()+1)}-${pad(x.getDate())}`; };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// For text that lands inside a JS string inside an HTML attribute (onclick="f('…')").
+// The browser decodes entities before the JS is parsed, so escape for JS first and for
+// HTML second; the other order lets an apostrophe close the string and break the handler.
+const escJs = s => esc(String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' '));
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const monthsBack = k => MON[new Date(TODAY.getFullYear(), TODAY.getMonth() - k, 1).getMonth()];
 function nextDue(day){
@@ -986,7 +990,9 @@ function simulate(p){
     }
   }
   const pick = (arr, f) => arr[Math.min(arr.length-1, Math.floor(f * arr.length))];
-  const out = {p10:[], p50:[], p90:[], monthly: income - nonDebt - debtPay, runway: (CASH + (p.payout ? PAYOUT : 0)) / (nonDebt + debtPay), prob: 0};
+  const spendPerMonth = nonDebt + debtPay;
+  const out = {p10:[], p50:[], p90:[], monthly: income - nonDebt - debtPay,
+    runway: spendPerMonth > 0 ? (CASH + (p.payout ? PAYOUT : 0)) / spendPerMonth : 0, prob: 0};
   cols.forEach(arr => { arr.sort((a,b) => a-b); out.p10.push(pick(arr,.1)); out.p50.push(pick(arr,.5)); out.p90.push(pick(arr,.9)); });
   out.prob = cols[Y].filter(v => v > NW).length / N;
   return out;
@@ -1082,7 +1088,7 @@ function flowList(n){
   return FLOWS.slice(0, n).map(f => {
     run += f.out ? -f.amt : f.amt;
     return `<div class="bill"><div><b>${fdate(f.date)}</b><br><small>${f.left === 0 ? 'Today' : f.left + ' days'}</small></div>
-      <div>${f.name}${f.out ? '' : ' <span class="tag ok">in</span>'}</div>
+      <div>${esc(f.name)}${f.out ? '' : ' <span class="tag ok">in</span>'}</div>
       <div class="${f.out ? 'amt-out' : 'amt-in'}">${f.out ? '−' : '+'}${fmt(f.amt)}</div>
       <div class="muted r">${run < 0 ? '<span class="tag bad">short</span>' : 'bal ' + fmt(run)}</div></div>`;
   }).join('');
@@ -1162,7 +1168,7 @@ let BI = 0;
 function renderBrief(){
   const b = BRIEF[BI], el = $('brief'); if (!el) return;
   el.innerHTML = `<span class="bn"><b>${pad(BI+1)}</b>/${pad(BRIEF.length)}</span>
-    <span class="bt"><b>${b.t}</b><span>${b.s}</span></span>
+    <span class="bt"><b>${esc(b.t)}</b><span>${esc(b.s)}</span></span>
     <button class="rb" onclick="go('${b.go}')" title="${b.b}" aria-label="${b.b}">${IC.arrow}</button>
     <button class="rb w" onclick="BI=(BI+1)%BRIEF.length;renderBrief()" aria-label="Next briefing item">${IC.right}</button>`;
 }
@@ -1173,7 +1179,7 @@ function viewHome(){
   const flagged = D.subs.filter(s => s.flag).length;
   const pc = PAYOUT_CLAIM;
   const tiles = [
-    pc ? {glow:true, i:'shield', n:'Pending payout', s:`${esc(pc.name.split(' · ')[0])} · ${pc.missing.length ? pc.missing.length + ' documents' : esc(pc.status)}`, v:`<span class="cur" style="color:rgba(255,255,255,.7)">${CUR}</span>${kSmall(pc.payout)}`, viz:dots(pc.steps ? pc.steps.length : 1, (pc.cur ?? 0) + 1), go:'debt'}
+    pc ? {glow:true, i:'shield', n:'Pending payout', s:`${pc.name.split(' · ')[0]} · ${pc.missing.length ? pc.missing.length + ' documents' : pc.status}`, v:`<span class="cur" style="color:rgba(255,255,255,.7)">${CUR}</span>${kSmall(pc.payout)}`, viz:dots(pc.steps ? pc.steps.length : 1, (pc.cur ?? 0) + 1), go:'debt'}
        : {glow:true, i:'shield', n:'Pending payout', s:'No claims are paying out', v:'0', viz:dots(1,0), go:'debt'},
     {sun:true, i:'cal', n:'Next 7 days', s:'Bills due, all covered', v:split(NEXT7), viz:mbars(FLOWS.filter(f=>f.out).slice(0,7).map(f=>f.amt)), go:'money'},
     {i:'card', n:'Total debts', s:`${D.debts.length} loans · ${aed(DEBT_PAY)}/mo`, v:kSmall(DEBT_TOTAL), viz:dots(Math.max(1, D.debts.length), D.debts.filter(d => d.orig && d.bal / d.orig < .5).length), go:'debt'},
@@ -1206,7 +1212,7 @@ function viewHome(){
         <div>
           ${NW_CHANGE}
           <div class="big" style="margin-top:10px"><span data-count="${Math.round(NW)}">${money(NW)}</span></div>
-          <div class="note" style="margin-top:10px">${D.user.household}</div>
+          <div class="note" style="margin-top:10px">${esc(D.user.household)}</div>
         </div>
         ${dial(RUNWAY, 12, 'MONTHS RUNWAY')}
       </div>
@@ -1218,7 +1224,7 @@ function viewHome(){
     <div class="tiles">
       ${tiles.map((t,k) => `<div class="tile rv ${t.glow?'glow':''} ${t.sun?'sun':''}" style="--d:${.15 + k*.06}s" onclick="go('${t.go}')">
         <div class="t-top"><span class="chip-ic ic">${IC[t.i]}</span>${arrowBtn(t.go)}</div>
-        <div class="t-name">${t.n}</div><div class="t-sub">${t.s}</div>
+        <div class="t-name">${t.n}</div><div class="t-sub">${esc(t.s)}</div>
         <div class="t-bot"><div class="num">${t.v}</div>${t.viz}</div>
       </div>`).join('')}
     </div>
@@ -1240,9 +1246,9 @@ function viewHome(){
         <div class="bh"><h2>Your <em>accounts</em></h2><div style="display:flex;gap:8px"><button class="round" onclick="curveStep('accCurve',-1)" aria-label="Previous account">${IC.left}</button><button class="round dark" onclick="curveStep('accCurve',1)" aria-label="Next account">${IC.right}</button></div></div>
         <div class="curve" id="accCurve" style="--cw:210px;--ch:270px;height:310px">${D.accounts.map(a => `
           <div class="cv"><div class="acc" style="--g:${a.g}">
-            <div class="a-top"><span class="chip-ic ic">${IC[a.i]}</span><span>${a.name}</span></div>
-            <div class="a-bank">${a.bank}</div>
-            <div class="a-bot"><small>Balance</small><div class="num">${a.bal >= 1e6 ? kSmall(a.bal) : split(a.bal)}</div>${a.flag ? `<span class="tag">${a.flag}</span>` : `<div class="a-bank">${a.note || ''}</div>`}</div>
+            <div class="a-top"><span class="chip-ic ic">${IC[a.i]}</span><span>${esc(a.name)}</span></div>
+            <div class="a-bank">${esc(a.bank)}</div>
+            <div class="a-bot"><small>Balance</small><div class="num">${a.bal >= 1e6 ? kSmall(a.bal) : split(a.bal)}</div>${a.flag ? `<span class="tag">${esc(a.flag)}</span>` : `<div class="a-bank">${esc(a.note || '')}</div>`}</div>
           </div></div>`).join('')}</div>
         <div class="cv-dots" id="accDots"></div>
       </div>
@@ -1294,34 +1300,36 @@ function nwRange(k){
   document.querySelectorAll('#nwSeg button').forEach(b => b.classList.toggle('on', +b.dataset.k === k));
 }
 
+// A share of a total, safe when the total is zero (a household with nothing in it yet).
+const pctOf = (v, total) => total > 0 ? v / total * 100 : 0;
 function viewMoney(){
   const cats = [{v:ESS,c:'#121212',l:'Essentials'},{v:DEBT_PAY,c:'#8db7e6',l:'Debt payments'},{v:LIFE,c:'#f4a26b',l:'Lifestyle'}];
   return secHead('money') + `
   <div class="kpis">
-    ${D.accounts.slice(0,2).map(a => `<div class="card kpi rv"><div class="lbl">${a.name}</div><div class="num"><span data-count="${a.bal}">${money(a.bal)}</span></div><div class="note">${a.bank}${a.note ? ' · ' + a.note : ''}</div></div>`).join('')}
+    ${D.accounts.slice(0,2).map(a => `<div class="card kpi rv"><div class="lbl">${esc(a.name)}</div><div class="num"><span data-count="${a.bal}">${money(a.bal)}</span></div><div class="note">${esc(a.bank)}${a.note ? ' · ' + esc(a.note) : ''}</div></div>`).join('')}
     ${kpi('Monthly income', INCOME, {note:'Salary and rent'})}
     ${kpi('Monthly outgoings', OUT, {note:`Gap ${sgn(GAP)} a month`, tone:'down'})}
   </div>
   <div class="grid">
     <div class="card span-6 rv" style="--d:.05s">
       <h3>Money map</h3><div class="hint">This month’s outgoings against income.</div>
-      <div class="money-bar"><div style="width:${ESS/OUT*100}%;background:#121212"></div><div style="width:${DEBT_PAY/OUT*100}%;background:#8db7e6"></div><div style="width:${LIFE/OUT*100}%;background:#f4a26b"></div><div class="marker" style="left:${INCOME/OUT*100}%"></div></div>
+      <div class="money-bar"><div style="width:${pctOf(ESS,OUT)}%;background:#121212"></div><div style="width:${pctOf(DEBT_PAY,OUT)}%;background:#8db7e6"></div><div style="width:${pctOf(LIFE,OUT)}%;background:#f4a26b"></div><div class="marker" style="left:${Math.min(100, pctOf(INCOME,OUT))}%"></div></div>
       <div class="legend"><span><i style="background:#121212"></i>Essentials ${aed(ESS)}</span><span><i style="background:#8db7e6"></i>Debt ${aed(DEBT_PAY)}</span><span><i style="background:#f4a26b"></i>Lifestyle ${aed(LIFE)}</span></div>
       <p class="note" style="margin-top:14px">The red line is your income of ${aed(INCOME)}. Outgoings are ${aed(OUT)}, so the gap is ${aed(-GAP)} a month.</p>
     </div>
     <div class="card span-6 rv" style="--d:.08s"><h3>Cash flow</h3><div class="hint">Last six months of recorded transactions. Black is money in, peach is money out.</div>
       ${bars(CFLOW.inc, CFLOW.out, [5,4,3,2,1,0].map(monthsBack))}</div>
     <div class="card span-7 rv" style="--d:.1s"><h3>Recent transactions</h3><div class="hint">Joint current account, most recent first.</div>
-      ${D.tx.map(x => `<div class="bill" style="grid-template-columns:74px 1fr auto"><div class="muted">${fdate(addDays(TODAY,x.d))}</div><div>${x.t}</div><div class="${x.a>0?'amt-in':'amt-out'} r">${x.a>0?'+':'−'}${fmt(Math.abs(x.a))}</div></div>`).join('')}
+      ${D.tx.map(x => `<div class="bill" style="grid-template-columns:74px 1fr auto"><div class="muted">${fdate(addDays(TODAY,x.d))}</div><div>${esc(x.t)}</div><div class="${x.a>0?'amt-in':'amt-out'} r">${x.a>0?'+':'−'}${fmt(Math.abs(x.a))}</div></div>`).join('')}
     </div>
     <div class="card span-5 rv" style="--d:.15s"><h3>Where the money goes</h3><div class="hint">Monthly, by group.</div>
       <div style="display:flex;justify-content:center;margin:12px 0">${donut(cats, fmt(OUT), CUR + ' / MONTH')}</div>
-      ${cats.map(c => `<div class="bill" style="grid-template-columns:12px 1fr auto auto"><i style="width:9px;height:9px;border-radius:50%;background:${c.c}"></i><div>${c.l}</div><div class="r">${aed(c.v)}</div><div class="muted r">${(c.v/OUT*100).toFixed(0)}%</div></div>`).join('')}
+      ${cats.map(c => `<div class="bill" style="grid-template-columns:12px 1fr auto auto"><i style="width:9px;height:9px;border-radius:50%;background:${c.c}"></i><div>${c.l}</div><div class="r">${aed(c.v)}</div><div class="muted r">${pctOf(c.v,OUT).toFixed(0)}%</div></div>`).join('')}
     </div>
     <div class="card span-12 rv" style="--d:.2s"><div class="card-h"><div><h3>Bills calendar</h3><div class="hint">Next 30 days, including salary and rent in.</div></div></div>${flowList(FLOWS.length)}</div>
     <div class="card span-12 rv" style="--d:.25s"><div class="card-h"><div><h3>Subscription audit</h3><div class="hint">Tick the ones you want to look at. Nothing is cancelled here.</div></div><button class="btn solid" onclick="modelSubs()">Model these in the Scenario lab</button></div>
       <div class="tscroll"><table class="t"><thead><tr><th></th><th>Service</th><th>Used</th><th class="r">Per month</th><th>Note</th></tr></thead><tbody>
-      ${D.subs.map((s,i) => `<tr><td><input type="checkbox" onchange="toggleSub(${i},this.checked)"></td><td><b style="font-weight:600">${s.name}</b></td><td class="muted">${s.used}</td><td class="r">${aed(s.amt)}</td><td>${s.flag?'<span class="tag warn">Review</span> ':''}<span class="muted">${s.note||''}</span></td></tr>`).join('')}
+      ${D.subs.map((s,i) => `<tr><td><input type="checkbox" onchange="toggleSub(${i},this.checked)"></td><td><b style="font-weight:600">${esc(s.name)}</b></td><td class="muted">${esc(s.used)}</td><td class="r">${aed(s.amt)}</td><td>${s.flag?'<span class="tag warn">Review</span> ':''}<span class="muted">${esc(s.note||'')}</span></td></tr>`).join('')}
       </tbody></table></div>
       <p class="note" style="margin-top:12px" id="subSum"></p>
     </div>
@@ -1372,7 +1380,7 @@ function viewInvest(){
       <p class="note" style="margin-top:14px">Analyst ratings describe what professionals think. They do not know your goals, your timeline or your tax position. You can act now, later, or not at all.</p>
       <div class="opts">
         <div class="opt"><b>Keep things as they are</b><p>Nothing here has a deadline. Doing nothing is a valid choice.</p><button class="btn sm" onclick="applyPreset('base');go('scen')">See baseline</button></div>
-        <div class="opt"><b>${conc ? `Trim ${cShort} to ${conc.guideline}%` : 'Rebalance'}</b><p>${conc ? 'Sells part of the single stock to match your guideline.' : 'Moves the mix back toward broad funds.'} Tax on gains is not modelled.</p><button class="btn sm" onclick="applyPreset('rebal');go('scen')">Model it</button></div>
+        <div class="opt"><b>${conc ? `Trim ${cShort} to ${conc.guideline}%` : 'Rebalance'}</b><p>${conc ? 'Sells part of the single stock to match your guideline.' : 'Moves the mix back toward broad funds.'} Tax on gains is not modelled.</p>${hasPreset('rebal') ? `<button class="btn sm" onclick="applyPreset('rebal');go('scen')">Model it</button>` : `<button class="btn sm" disabled title="Needs a holding above its guideline and a year of month-end prices">Model it</button>`}</div>
         <div class="opt"><b>Stage changes over six months</b><p>Spreads any move across several months so timing matters less.</p><button class="btn sm" onclick="go('scen')">Open lab</button></div>
       </div>
     </div>
@@ -1390,8 +1398,8 @@ function pulseRow(h){
   </div>`;
 }
 function stepper(c){
-  if (!c.steps) return `<div style="margin-top:12px"><span class="tag ok">${c.status}</span></div>`;
-  return `<div class="step-row">${c.steps.map((s,i) => `<div class="st ${i<c.cur?'done':i===c.cur?'cur':''}">${s}</div>`).join('')}</div><div class="note">${c.status}</div>`;
+  if (!c.steps) return `<div style="margin-top:12px"><span class="tag ok">${esc(c.status)}</span></div>`;
+  return `<div class="step-row">${c.steps.map((s,i) => `<div class="st ${i<c.cur?'done':i===c.cur?'cur':''}">${esc(s)}</div>`).join('')}</div><div class="note">${esc(c.status)}</div>`;
 }
 function viewDebt(){
   return secHead('debt') + `
@@ -1400,17 +1408,17 @@ function viewDebt(){
       const paid = (1 - d.bal/d.orig)*100, interest = d.bal*d.rate/100/12;
       return `<div class="card span-4 rv" style="--d:${k*.06}s">
         <div class="card-h" style="margin-bottom:4px"><span class="chip-ic ic">${IC.card}</span><span class="tag">${d.rate}% <abbr title="Annual percentage rate: the yearly cost of borrowing, including fees">APR</abbr></span></div>
-        <h3 style="margin-top:10px">${d.name}</h3>
+        <h3 style="margin-top:10px">${esc(d.name)}</h3>
         <div class="num" style="margin:14px 0 16px">${money(d.bal)}</div>
         <div class="bar-track"><div class="bar-fill" style="width:${paid}%;background:${d.c}"></div></div>
         <div class="note" style="margin-top:8px">${paid.toFixed(0)}% repaid · ${aed(d.pay)} a month · about ${aed(interest)} of interest this month</div>
-        <p class="note" style="margin:10px 0 0;color:var(--ink2)">${d.note}</p>
+        <p class="note" style="margin:10px 0 0;color:var(--ink2)">${esc(d.note || '')}</p>
       </div>`;
     }).join('')}
     <div class="card span-12 rv" style="--d:.2s"><h3>Insurance and claims</h3><div class="hint">Where each claim stands and what the insurer still needs.</div>
       <div class="grid" style="margin-top:14px">
-        ${D.claims.map(c => `<div class="card span-4" style="background:rgba(255,255,255,.75)"><b style="font-weight:600">${c.name}</b>${stepper(c)}
-          ${c.missing && c.missing.length ? `<div class="gh" style="margin-top:16px">Still needed</div>${c.missing.map(m => `<div class="src"><span>${m}</span><span class="tag warn">${c.due !== undefined ? 'Due ' + fdate(addDays(TODAY, c.due)) : 'Needed'}</span></div>`).join('')}` : ''}
+        ${D.claims.map(c => `<div class="card span-4" style="background:rgba(255,255,255,.75)"><b style="font-weight:600">${esc(c.name)}</b>${stepper(c)}
+          ${c.missing && c.missing.length ? `<div class="gh" style="margin-top:16px">Still needed</div>${c.missing.map(m => `<div class="src"><span>${esc(m)}</span><span class="tag warn">${c.due !== undefined ? 'Due ' + fdate(addDays(TODAY, c.due)) : 'Needed'}</span></div>`).join('')}` : ''}
         </div>`).join('')}
       </div>
       <p class="note" style="margin-top:14px">The life payout is not counted in net worth until it is approved. Ask the insurer for the exact list in writing.</p>
@@ -1431,7 +1439,7 @@ function fmtVal(k,v){
 function viewScen(){
   return secHead('scen') + `
   <div class="card rv"><div class="card-h"><div><h3>Decision presets</h3><div class="hint">Each preset loads a real decision into the model. Pick one, then adjust.</div></div></div>
-    <div class="presets" id="presets">${PRESETS.map(p => `<button class="preset" data-id="${p.id}" onclick="applyPreset('${p.id}')">${p.label}</button>`).join('')}</div></div>
+    <div class="presets" id="presets">${PRESETS.map(p => `<button class="preset" data-id="${p.id}" onclick="applyPreset('${p.id}')">${esc(p.label)}</button>`).join('')}</div></div>
   <div class="grid">
     <div class="card span-4 rv" style="--d:.08s"><h3>Build your own</h3><div class="hint">Move a slider and the projection updates. The same random seed is used every time, so changes are comparable.</div><div style="margin-top:18px">${slidersHtml()}</div></div>
     <div class="stack span-8 rv" style="--d:.14s" id="scenResults"></div>
@@ -1444,7 +1452,15 @@ function syncSliders(){
   $('sl-payout').checked = S.payout;
 }
 function updatePresets(){ document.querySelectorAll('.preset').forEach(b => b.classList.toggle('on', b.dataset.id === S.preset)); }
-function applyPreset(id){ const p = PRESETS.find(x => x.id === id); S = {...DEFAULTS, ...p.set, preset:id}; syncSliders(); updatePresets(); renderScenResults(); }
+function applyPreset(id){
+  const p = PRESETS.find(x => x.id === id);
+  // Some presets only exist for certain data (rebal needs a holding over its guideline
+  // and a year of price history). Fall back to the baseline rather than throwing.
+  if (!p){ toast('That option needs more data than Haven has yet. Showing the baseline.'); id = 'base'; }
+  S = {...DEFAULTS, ...((p || {}).set || {}), preset:id};
+  syncSliders(); updatePresets(); renderScenResults();
+}
+const hasPreset = id => PRESETS.some(p => p.id === id);
 function onSlider(k, v){ S[k] = Number(v); S.preset = 'custom'; $('val-'+k).textContent = fmtVal(k, S[k]); paintRange($('sl-'+k)); updatePresets(); renderScenResults(); }
 function onPayout(on){ S.payout = on; S.preset = 'custom'; updatePresets(); renderScenResults(); }
 const DLOG = [];
@@ -1452,7 +1468,7 @@ function logDecision(){
   const base = simulate(DEFAULTS), sc = simulate(S);
   const label = (PRESETS.find(p => p.id === S.preset) || {label:'Custom mix'}).label;
   DLOG.unshift({when: new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}), title: label, delta: sc.p50[10]-base.p50[10]});
-  $('dlog').innerHTML = DLOG.map(x => `<div class="dl"><b>${x.title}</b><span>${x.when} · median 10-year change ${sgn(x.delta)} ${CUR} vs baseline</span></div>`).join('');
+  $('dlog').innerHTML = DLOG.map(x => `<div class="dl"><b>${esc(x.title)}</b><span>${x.when} · median 10-year change ${sgn(x.delta)} ${CUR} vs baseline</span></div>`).join('');
   toast('Logged. Nothing was executed.');
 }
 function verdictText(d, widen){
@@ -1541,7 +1557,7 @@ function viewGoals(){
     <div class="card span-7 rv" style="--d:.1s" id="goalDetail"></div>
     <div class="card span-5 rv" style="--d:.15s">
       <h3>New goal or <em>challenge</em></h3><div class="hint">Short-term challenges build habits. Long-term goals build security.</div>
-      <div class="tpl" style="margin-top:14px">${tpls.map((t,i) => `<button onclick='fillGoal(${JSON.stringify(t)})'><i style="--c:${t.c}"></i>${t.n}</button>`).join('')}</div>
+      <div class="tpl" style="margin-top:14px">${tpls.map((t,i) => `<button onclick="fillGoal(${esc(JSON.stringify(t))})"><i style="--c:${t.c}"></i>${esc(t.n)}</button>`).join('')}</div>
       <form class="gform" onsubmit="event.preventDefault();createGoal()">
         <div class="rail" id="gRail"><span class="rl">COLOR</span>${GCOLORS.map((c,i) => `<button type="button" style="--c:${c}" class="${i===0?'on':''}" data-c="${c}" onclick="pickColor('${c}')" aria-label="Colour ${c}"></button>`).join('')}</div>
         <div>
@@ -1624,7 +1640,7 @@ function renderGoalDetail(g){
     : `<button class="btn solid" onclick="logGoal('${g.id}',1)">${IC.check.replace('<svg','<svg class="i"')} Check in +1</button>`;
   el.innerHTML = `
     <div class="card-h"><div><span class="tag" style="background:${g.color};color:${lum(g.color)<.6?'#fff':'#121212'}">${g.kind === 'short' ? 'Short-term challenge' : 'Long-term goal'}</span><h3 style="font-size:24px;margin-top:10px">${esc(g.name)}</h3><div class="hint">Started ${fdate(g.start)} · finish by ${fdate(g.due)}</div></div>
-      <button class="btn sm" onclick="openHaven('How am I doing on ${esc(g.name).replace(/'/g,'')}?')">Ask Haven</button></div>
+      <button class="btn sm" onclick="openHaven('How am I doing on ${escJs(g.name)}?')">Ask Haven</button></div>
     <div class="gd-big"><div class="big" style="font-size:52px">${g.mode === 'amount' ? money(g.progress) : fmt(g.progress) + `<small> ${esc(g.unit)}</small>`}</div><span class="muted" style="padding-bottom:6px">of ${gUnit(g, g.target)}</span></div>
     <div class="gd-bar"><i style="width:${p*100}%;background:${g.color}"></i><span class="pace" style="left:${pace*100}%" title="Where you would be at an even pace"></span></div>
     <div class="gd-stats">
@@ -1707,7 +1723,7 @@ function viewPlan(){
     </div>
     <div class="card span-8 rv" style="--d:.08s">
       ${groups.map(g => `<div class="gh">${g}</div><div class="checks">${PLAN.filter(p => p.g === g).map(p => `
-        <label class="${PDONE.has(p.id)?'done':''}"><input type="checkbox" ${PDONE.has(p.id)?'checked':''} onchange="togglePlan('${p.id}',this.checked);this.parentElement.classList.toggle('done',this.checked)"><span><b>${p.t}</b><small>${p.n}</small></span></label>`).join('')}</div>`).join('')}
+        <label class="${PDONE.has(p.id)?'done':''}"><input type="checkbox" ${PDONE.has(p.id)?'checked':''} onchange="togglePlan('${p.id}',this.checked);this.parentElement.classList.toggle('done',this.checked)"><span><b>${esc(p.t)}</b><small>${esc(p.n)}</small></span></label>`).join('')}</div>`).join('')}
     </div>
     <div class="card span-12 rv" style="--d:.14s"><h3>Plain-language glossary</h3><div class="hint">Terms you will hear over the coming weeks.</div>
       <div class="gl" style="margin-top:14px">
@@ -1872,7 +1888,7 @@ function init(){
   $('trust').innerHTML = [['Accounts', D.accounts.length + ' linked'], ['Bills & income', FLOWS.length + ' in 30d'], ['Subscriptions', D.subs.length], ['Holdings', D.holdings.length], ['Claims', D.claims.length], ['Goals', GOALS.length], ['Moves money', 'never'], ['Contacts anyone', 'never']]
     .map(([a,b]) => `<span>${a}<b>${b}</b></span>`).join('');
   $('meAv').textContent = D.user.name.charAt(0).toUpperCase(); $('meName').textContent = D.user.name; $('meRole').textContent = ROLE.charAt(0).toUpperCase() + ROLE.slice(1);
-  $('notes').innerHTML = '<h4>Haven noticed</h4>' + (D.notes.length ? '' : '<div class="note-i"><div><b>Nothing needs you right now</b></div></div>') + D.notes.map(x => `<div class="note-i" onclick="go('${x.go}')"><i style="background:${x.c}"></i><div><b>${x.t}</b><span>${x.s}</span></div></div>`).join('');
+  $('notes').innerHTML = '<h4>Haven noticed</h4>' + (D.notes.length ? '' : '<div class="note-i"><div><b>Nothing needs you right now</b></div></div>') + D.notes.map(x => `<div class="note-i" onclick="go('${x.go}')"><i style="background:${x.c}"></i><div><b>${esc(x.t)}</b><span>${esc(x.s)}</span></div></div>`).join('');
   $('bell').insertAdjacentHTML('afterbegin', IC.bell);
   $('bellCount').textContent = D.notes.length || '';
   const tick = () => { $('clock').textContent = new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'}); };

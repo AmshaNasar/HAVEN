@@ -2,7 +2,7 @@
 -- Proves the access model against the seeded demo household.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(38);
+select plan(41);
 
 -- an outsider with a household of their own
 insert into auth.users (instance_id, id, aud, role, email, raw_user_meta_data)
@@ -89,6 +89,30 @@ select throws_ok($$select public.log_goal_progress('c3c3c3c3-0000-4000-8000-0000
 select throws_ok($$insert into public.accounts (household_id, name, institution, kind, balance)
   values ('b2b2b2b2-0000-4000-8000-000000000001', 'Mine now', 'Bank', 'current', 1)$$, '42501', null, 'outsider cannot write into another household');
 select throws_ok($$select public.refresh_snapshot('b2b2b2b2-0000-4000-8000-000000000001')$$, '42501', null, 'outsider cannot snapshot another household');
+reset role;
+
+-- ------------------------------------------------- regressions (owner)
+select pg_temp.as_user('a1a1a1a1-0000-4000-8000-000000000001');
+-- "javascript:" is legal in short_text, so the activity trigger must not fail the
+-- user's own insert on activity_log.message (safe_text, which rejects it).
+select lives_ok($$insert into public.transactions (household_id, posted_on, description, amount)
+  values ('b2b2b2b2-0000-4000-8000-000000000001', current_date, 'Paid javascript: ltd', -10)$$,
+  'text containing javascript: can still be saved');
+select is((select message::text from public.activity_log order by id desc limit 1),
+  'Recorded a payment: Paid javascript ltd', 'the activity message is sanitised, not rejected');
+reset role;
+
+-- a second investment account must not be handed the same portfolio again
+insert into public.market_quotes (symbol, currency, price, fetched_at)
+  select symbol, 'USD', 100, now() from public.holdings
+  where household_id = 'b2b2b2b2-0000-4000-8000-000000000001';
+insert into public.accounts (household_id, name, institution, kind, balance, sort_order)
+  values ('b2b2b2b2-0000-4000-8000-000000000001', 'Second brokerage', 'Other', 'investment', 0, 9);
+select pg_temp.as_user('a1a1a1a1-0000-4000-8000-000000000001');
+select is((select count(*)::int from public.accounts_live
+           where household_id = 'b2b2b2b2-0000-4000-8000-000000000001'
+             and kind = 'investment' and balance > 0), 1,
+  'the live portfolio is attributed to one investment account, not to every one');
 reset role;
 
 select * from finish();

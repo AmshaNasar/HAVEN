@@ -4,7 +4,6 @@
 -- Afterwards, to refresh prices in the background, run (with your project ref and CRON_SECRET):
 --   select private.schedule_market_refresh('https://<ref>.supabase.co/functions/v1/market', '<CRON_SECRET>');
 
-
 -- ====================================================================
 -- 20261018000100_schema.sql
 -- ====================================================================
@@ -660,8 +659,15 @@ left join lateral (
 
 -- Accounts, with any investment account valued from the live holdings.
 create view public.accounts_live with (security_invoker = true) as
+-- The holdings belong to the household, not to one account row, so the live value is
+-- attributed to a single investment account (the first by sort_order). Any other
+-- investment account keeps its own stored balance; otherwise the same portfolio would
+-- be counted once per account and inflate total_assets, net_worth and the snapshots.
 select a.id, a.household_id, a.name, a.institution, a.kind,
   case when a.kind = 'investment'
+        and a.id = (select x.id from public.accounts x
+                    where x.household_id = a.household_id and x.kind = 'investment'
+                    order by x.sort_order, x.id limit 1)
        then coalesce((select sum(v.value) from public.holdings_live v where v.household_id = a.household_id), 0)
        else a.balance end as balance,
   a.monthly_fees, a.card_style, a.icon, a.note, a.flag, a.sort_order
@@ -808,8 +814,13 @@ begin
       ic := 'doc'; msg := new.name || ': ' || new.status;
     else return null;
   end case;
+  -- activity_log.message is safe_text, which also rejects 'javascript:'. The source
+  -- columns are short_text, which allows it, so strip both here or the user's own
+  -- insert fails with a confusing domain violation.
+  msg := regexp_replace(msg, '[<>`]', '', 'g');
+  msg := regexp_replace(msg, 'javascript:', 'javascript', 'gi');
   insert into public.activity_log (household_id, icon, message)
-  values (new.household_id, ic, left(regexp_replace(msg, '[<>`]', '', 'g'), 300));
+  values (new.household_id, ic, left(msg, 300));
   return null;
 end $$;
 
@@ -862,6 +873,11 @@ end $$;
 create or replace function public.set_plan_item(p_household uuid, p_item text, p_done boolean)
 returns void language plpgsql security invoker set search_path = '' as $$
 begin
+  -- RLS would silently filter the delete to zero rows for a viewer while the insert
+  -- raises, so check once up front and fail the same way either way.
+  if not private.can_edit(p_household) then
+    raise exception 'your role in this household cannot change the plan' using errcode = '42501';
+  end if;
   if p_done then
     insert into public.plan_progress (household_id, plan_item_id) values (p_household, p_item)
     on conflict do nothing;

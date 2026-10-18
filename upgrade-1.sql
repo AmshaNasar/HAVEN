@@ -10,8 +10,15 @@ alter table public.households
   add column if not exists home_growth_pct         numeric(5,2) not null default 3  check (home_growth_pct between -10 and 20);
 grant update (name, members_label, currency, expected_return_pct, fallback_volatility_pct, home_growth_pct) on public.households to authenticated;
 
-create extension if not exists pg_net;
-create extension if not exists pg_cron;
+-- pg_net and pg_cron are not available on every project or plan. Guarded so a
+-- project without them still gets the rest of this upgrade.
+do $$
+begin
+  create extension if not exists pg_net;
+  create extension if not exists pg_cron;
+exception when others then
+  raise notice 'pg_net/pg_cron unavailable (%); enable them under Database > Extensions, then run the schedule_market_refresh line below', sqlerrm;
+end $$;
 
 create or replace function private.schedule_market_refresh(p_url text, p_secret text)
 returns text language plpgsql security definer set search_path = '' as $$
@@ -40,5 +47,12 @@ revoke all on all functions in schema private from public, anon, authenticated;
 grant execute on function private.is_member(uuid), private.has_role(uuid, public.household_role[]),
   private.can_edit(uuid), private.is_owner(uuid), private.shares_household(uuid) to authenticated;
 
--- Start the 15-minute refresh. The same secret must be saved as CRON_SECRET under Edge Functions > Secrets.
-select private.schedule_market_refresh('https://<ref>.supabase.co/functions/v1/market', '<CRON_SECRET>');
+-- Last step, run separately. Replace <ref> with your project ref and <CRON_SECRET> with
+-- the same value you saved under Edge Functions > Secrets (at least 24 characters), then
+-- run this one line on its own in the SQL Editor:
+--
+--   select private.schedule_market_refresh('https://<ref>.supabase.co/functions/v1/market', '<CRON_SECRET>');
+--
+-- It is deliberately left commented out: run as written, the placeholder secret is
+-- rejected, and because the SQL Editor runs a script in one transaction that failure
+-- would roll back everything above.
