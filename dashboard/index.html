@@ -27,6 +27,29 @@ button{font:inherit;color:inherit}
 .hidden{display:none !important}
 em{font-family:var(--serif);font-style:italic;font-weight:400;letter-spacing:-.01em}
 
+/* ================= FORESIGHT ================= */
+.rk-alert{display:flex;gap:14px;align-items:center;background:var(--solid);border:1px solid var(--line);border-left:4px solid var(--sev);border-radius:18px;padding:14px 18px;margin-bottom:16px;cursor:pointer}
+.rk-alert .rk-dot{width:10px;height:10px;border-radius:50%;background:var(--sev);flex:none;animation:blinkSoft 2.4s ease-in-out infinite}
+.rk-alert b{display:block;font-weight:600}
+.rk-alert span{font-size:12.5px;color:var(--muted)}
+.rk-alert .arrow{margin-left:auto}
+.rk-f{border:1px solid var(--line);border-radius:20px;padding:18px;margin-bottom:12px;background:var(--solid);border-left:4px solid var(--sev)}
+.rk-f .rk-h{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.rk-f .rk-h b{font-weight:600;font-size:15.5px;flex:1;min-width:200px}
+.rk-sev{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;padding:4px 9px;border-radius:999px;color:#fff;background:var(--sev);white-space:nowrap}
+.rk-when{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.rk-f dl{margin:14px 0 0;display:grid;gap:10px}
+.rk-f dt{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.rk-f dd{margin:0;color:var(--ink2);font-size:13.5px;line-height:1.5}
+.rk-do{margin:14px 0 0;padding:0;list-style:none;display:grid;gap:7px}
+.rk-do li{display:flex;gap:9px;align-items:flex-start;font-size:13.5px}
+.rk-do li i{width:5px;height:5px;border-radius:50%;background:var(--sev);margin-top:7px;flex:none}
+.rk-act{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.rk-proj{font-size:12.5px;color:var(--muted)}
+.rk-proj b{font-weight:600}
+.rk-empty{text-align:center;padding:50px 20px}
+.rk-empty .o{width:54px;height:54px;border-radius:50%;background:var(--orb);margin:0 auto 16px;opacity:.9}
+
 /* ================= SIGN IN ================= */
 #login{position:fixed;inset:0;z-index:300;background:#000;color:#fff;display:grid;place-items:center;padding:24px}
 #login.gone{display:none}
@@ -576,6 +599,7 @@ input[type=checkbox]{accent-color:#121212;width:15px;height:15px}
     <section class="view" id="v-goals"></section>
     <section class="view" id="v-scen"></section>
     <section class="view" id="v-plan"></section>
+    <section class="view" id="v-risk"></section>
     <div class="foot">Household figures from your Haven database · Market prices live from Finnhub and Twelve Data · Haven never moves money without you</div>
   </div>
 </div>
@@ -679,6 +703,7 @@ const daysFromToday = d => dayDiff(new Date(d + 'T00:00:00'));
 let D = null, GOALS = [], HH = null, ROLE = 'member', CUR = 'AED', ASSUME = {ret:6, vol:14, home:3}, MHIST = [];
 let SNAPS = [], PHIST = {vals:[], labels:[]}, CFLOW = {inc:[0,0,0,0,0,0], out:[0,0,0,0,0,0]}, ACTIVITY = [], BRIEF = [];
 let FX = null, LAST_PRICE = null, MARKET_ERRORS = [];
+let RISK = null, RISK_FINDINGS = [];                 // this week's foresight report
 
 /* ---------- derived figures ---------- */
 let SUBS_TOTAL, SPEND, NON_DEBT, ESS, LIFE, DEBT_PAY, DEBT_TOTAL, DEBT_RATE, INCOME, OUT, GAP, CASH, ASSETS, NW,
@@ -809,6 +834,20 @@ function liveNote(){
 let DAY_CHANGE = 0;
 
 /* ---------- loading ---------- */
+// The weekly report. Returns quickly when this week's report is already built;
+// rebuilds it when it is older than a week, so an idle household still gets one.
+async function refreshRisk(){
+  try { await rpc('refresh_risk_report', {p_household: HH}); }
+  catch (e) { /* keep whatever report is already stored */ }
+}
+async function loadRisk(){
+  try {
+    const [r] = await q(sb.from('risk_report_latest').select('*').eq('household_id', HH));
+    RISK = r || null;
+    RISK_FINDINGS = RISK ? await q(sb.from('risk_findings').select('*').eq('report_id', RISK.id).order('sort_order')) : [];
+  } catch (e) { RISK = null; RISK_FINDINGS = []; }
+}
+
 async function refreshMarket(){
   try {
     const { data, error } = await sb.functions.invoke('market', { body: { household_id: HH } });
@@ -890,6 +929,7 @@ async function loadData(){
   const months = [5,4,3,2,1,0].map(k => iso(new Date(TODAY.getFullYear(), TODAY.getMonth() - k, 1)));
   CFLOW = {inc: months.map(m => +((cflow.find(c => c.month === m) || {}).money_in || 0)), out: months.map(m => +((cflow.find(c => c.month === m) || {}).money_out || 0))};
   ACTIVITY = acts.map(a => ({i:a.icon, t:a.message, m:minsAgo(a.created_at)}));
+  await loadRisk();
   const fx = fxs.find(x => x.quote === CUR);
   FX = fx && CUR !== 'USD' ? {rate:+fx.rate, source:fx.source} : null;
   MHIST = mhist;
@@ -919,6 +959,7 @@ async function boot(){
     if (!mem.length) return showLogin('This account is not part of a household yet. Ask the household owner to add you.');
     HH = mem[0].household_id; ROLE = mem[0].role;
     await refreshMarket();
+    await refreshRisk();
     await loadData();
   } catch (e) { return showLogin('Could not load your data: ' + (e.message || e)); }
   $('login').classList.add('gone');
@@ -1145,6 +1186,7 @@ const SECTIONS = [
   {id:'debt', label:'Debts & insurance', title:'Debts &amp; <em>insurance</em>', lede:'Every loan, every claim, and what each one is still waiting on.', i:'shield', art:'radial-gradient(70% 70% at 25% 20%,#cfe3ff,transparent 70%),radial-gradient(80% 80% at 85% 100%,#2c5ea8,transparent 70%),#5d8fd6', stat:() => `${MISSING} document${MISSING === 1 ? '' : 's'} due`},
   {id:'goals', label:'Goals', title:'Goals &amp; <em>challenges</em>', lede:'Short sprints and long horizons. Set them, track them, and let Haven keep pace with you.', i:'target', art:'radial-gradient(70% 70% at 25% 20%,#ffd36b,transparent 65%),radial-gradient(80% 80% at 85% 100%,#c8102e,transparent 70%),#f2542d', stat:() => `${GOALS.filter(g=>!isDone(g)).length} active`},
   {id:'scen', label:'Scenario lab', title:'Scenario <em>lab</em>', lede:'Test a decision against 400 simulated futures before you make it.', i:'flask', art:'radial-gradient(70% 70% at 30% 20%,#ffd1e1,transparent 70%),radial-gradient(80% 80% at 85% 100%,#a3367a,transparent 70%),#e06b9b', stat:() => `${PRESETS.length} presets`},
+  {id:'risk', label:'Foresight', title:'Fore<em>sight</em>', lede:'What Haven can see coming, why it is happening, and what would change it. Reviewed every week.', i:'eye', art:'radial-gradient(70% 70% at 25% 20%,#ffd9c2,transparent 70%),radial-gradient(80% 80% at 85% 100%,#8a2d2d,transparent 70%),#d2694f', stat:() => RISK ? `${RISK.finding_count} open · score ${RISK.risk_score}` : 'not run yet'},
   {id:'plan', label:'First 30 days', title:'First <em>30 days</em>', lede:'One step at a time. There is no need to finish in order.', i:'list', art:'radial-gradient(70% 70% at 25% 20%,#d6f2c8,transparent 70%),radial-gradient(80% 80% at 85% 100%,#2f7a55,transparent 70%),#6fb68d', stat:() => `${PLAN.filter(p=>PDONE.has(p.id)).length}/${PLAN.length} done`}
 ];
 const ORDER = ['home', ...SECTIONS.map(s => s.id)];
@@ -1186,6 +1228,7 @@ function viewHome(){
     {i:'loop', n:'Subscriptions', s:`${flagged} flagged for review`, v:`${split(SUBS_TOTAL)}<small>/mo</small>`, viz:dots(Math.max(1, D.subs.length), flagged), go:'money'}
   ];
   return `
+  <div id="riskAlert" class="hidden"></div>
   <div class="home-stage rv" id="homeStage">
     <div class="core">
       <button class="big-orb" onclick="openHaven()" aria-label="Talk to Haven"><span class="glow"></span><span class="o"></span><span class="o2"></span></button>
@@ -1506,6 +1549,98 @@ function renderScenResults(){
   updatePresets();
 }
 
+/* ================= FORESIGHT ================= */
+const SEV = {
+  critical:{c:'#c0392b', t:'Critical'}, high:{c:'#e2583e', t:'High'},
+  medium:{c:'#c27a14', t:'Medium'},     low:{c:'#7d7973', t:'Low'}
+};
+const sev = k => SEV[k] || SEV.low;
+const riskUnread = () => !!(RISK && RISK.finding_count > 0 && !RISK.acknowledged_at);
+
+// What the suggested fix would do, using the same model as the Scenario lab.
+function riskProjection(id){
+  if (!id || !hasPreset(id) || !D) return null;
+  const p = PRESETS.find(x => x.id === id);
+  const base = simulate(DEFAULTS), sc = simulate({...DEFAULTS, ...p.set});
+  return {label: p.label, d50: sc.p50[10] - base.p50[10], dMonthly: sc.monthly - base.monthly,
+          runway: sc.runway - base.runway};
+}
+function horizonText(d){
+  if (d === null || d === undefined) return 'no deadline';
+  if (d < 0) return `${-d} days overdue`;
+  if (d === 0) return 'today';
+  if (d <= 31) return `within ${d} days`;
+  return `about ${Math.round(d/30)} months out`;
+}
+function findingCard(f){
+  const sv = sev(f.severity), proj = riskProjection(f.scenario);
+  const acts = (f.actions || []).map(a => `<li><i></i><span>${esc(a)}</span></li>`).join('');
+  return `<div class="rk-f" style="--sev:${sv.c}">
+    <div class="rk-h"><b>${esc(f.title)}</b><span class="rk-sev">${sv.t}</span><span class="rk-when">${horizonText(f.horizon_days)}</span></div>
+    <dl>
+      <div><dt>Why this is happening</dt><dd>${esc(f.cause)}</dd></div>
+      <div><dt>What it leads to</dt><dd>${esc(f.consequence)}</dd></div>
+    </dl>
+    ${acts ? `<ul class="rk-do">${acts}</ul>` : ''}
+    ${proj ? `<div class="rk-act">
+        <button class="btn sm solid" onclick="simulateFix('${esc(f.scenario)}')">Simulate the fix</button>
+        <span class="rk-proj">“${esc(proj.label)}” over 10 years: <b class="${proj.d50 >= 0 ? 'up' : 'down'}">${proj.d50 >= 0 ? '+' : '−'}${aed(Math.abs(proj.d50))}</b>${Math.abs(proj.dMonthly) >= 1 ? ` · ${sgn(proj.dMonthly)} ${CUR}/mo` : ''}</span>
+      </div>` : ''}
+  </div>`;
+}
+function simulateFix(id){ applyPreset(id); go('scen'); }
+async function recheckRisk(){
+  const b = $('rkBtn'); if (b){ b.disabled = true; b.textContent = 'Checking…'; }
+  try { await rpc('refresh_risk_report', {p_household: HH, p_max_age: '00:00:05'}); }
+  catch (e) { toast(dbError(e)); }
+  await loadRisk();
+  $('v-risk').innerHTML = viewRisk(); refreshArcStats(); renderRiskAlert();
+  toast('Foresight re-checked against your latest numbers.');
+}
+// Opening the report clears the alert for everyone in the household.
+async function ackRisk(){
+  if (!riskUnread()) return;
+  const id = RISK.id;
+  RISK.acknowledged_at = new Date().toISOString();
+  renderRiskAlert(); refreshArcStats();
+  try { await rpc('acknowledge_risk_report', {p_report: id}); } catch (e) { /* shown again next load */ }
+}
+function renderRiskAlert(){
+  const el = $('riskAlert'); if (!el) return;
+  if (!riskUnread()){ el.innerHTML = ''; el.classList.add('hidden'); return; }
+  const sv = sev(RISK.top_severity);
+  el.classList.remove('hidden');
+  el.innerHTML = `<div class="rk-alert" style="--sev:${sv.c}" onclick="go('risk')">
+    <span class="rk-dot"></span>
+    <span><b>Your weekly foresight report is ready</b><span>${esc(RISK.headline)} · week of ${fdate(RISK.period_start)}</span></span>
+    ${arrowBtn('risk')}</div>`;
+}
+function viewRisk(){
+  if (!RISK) return secHead('risk') + `<div class="card rv rk-empty"><div class="o"></div>
+    <h3>No report yet</h3><p class="note">Haven writes one every Monday, and whenever you open this page after a week has passed.</p>
+    <div style="margin-top:14px"><button class="btn solid" id="rkBtn" onclick="recheckRisk()">Run it now</button></div></div>`;
+  const sv = sev(RISK.top_severity), fs = RISK_FINDINGS;
+  const counts = ['critical','high','medium','low'].map(k => [k, fs.filter(f => f.severity === k).length]).filter(x => x[1]);
+  return secHead('risk') + `
+  <div class="kpis">
+    <div class="card kpi rv"><div class="lbl">Risk score</div>
+      <div class="num"><span style="color:${sv.c}">${RISK.risk_score}</span><small>/100</small></div>
+      <div class="note">${esc(RISK.headline)}</div></div>
+    ${kpi('Open risks', 0, {text:String(fs.length), note: counts.map(([k,v]) => `${v} ${sev(k).t.toLowerCase()}`).join(' · ') || 'nothing outstanding'})}
+    ${kpi('Week of', 0, {text:`<span style="font-size:26px">${fdate(RISK.period_start)}</span>`, note:`Written ${ago(minsAgo(RISK.generated_at))}`})}
+    <div class="card kpi rv"><div class="lbl">Next report</div><div class="num"><span style="font-size:26px">Monday</span></div>
+      <div class="note"><button class="btn sm" id="rkBtn" onclick="recheckRisk()">Re-check now</button></div></div>
+  </div>
+  <div class="card rv" style="--d:.08s">
+    <div class="card-h"><div><h3>What Haven can see coming</h3>
+      <div class="hint">Worked out from your own bills, balances, debts, holdings, claims and goals. Nothing here is sent anywhere, and nothing acts on its own.</div></div></div>
+    <div style="margin-top:16px">${fs.length ? fs.map(findingCard).join('')
+      : `<div class="rk-empty"><div class="o"></div><h3>Nothing needs you this week</h3>
+         <p class="note">No shortfalls, no overdue documents and no goal badly off pace. Haven will keep watching.</p></div>`}</div>
+    <p class="note" style="margin-top:14px">Severity reflects how soon a risk bites and how much it costs. It is not advice, and it does not know anything you have not told Haven.</p>
+  </div>`;
+}
+
 /* ================= GOALS & CHALLENGES ================= */
 const GCOLORS = ['#f5d22e','#f2542d','#ec8fae','#a99cf2','#8db7e6','#7ab894','#121212'];
 const isDone = g => g.progress >= g.target;
@@ -1752,6 +1887,11 @@ function advisorReply(q){
     if (!act.length) return 'You have no active goals right now. Want to start a gentle two-week challenge?';
     return `You have ${act.length} active goal${act.length>1?'s':''}:\n` + act.map(g => `• ${g.name}: ${Math.round(g.progress/g.target*100)}%, ${daysLeftText(g)}`).join('\n') + `\n\nAsk about any one by name and I will work out the pace.`;
   }
+  if (/risk|foresight|worried|worry|go wrong|coming up/.test(t)){
+    if (!RISK || !RISK_FINDINGS.length) return 'Nothing is flagged in this week\u2019s foresight report. I look again every Monday.';
+    const f = RISK_FINDINGS[0];
+    return `${RISK.headline}. The one I would look at first:\n\n\u2022 ${f.title} (${sev(f.severity).t.toLowerCase()})\n${f.cause}\n${f.consequence}\n\nWhat would change it: ${(f.actions || []).join('; ')}.\n\nThe Foresight section has the rest, and each one can be modelled in the Scenario lab.`;
+  }
   if (/realistic goal|help me set/.test(t)) return `A good first goal is small and close. Two ideas from your numbers:\n• A two-week challenge: pause the ${flagged.length} flagged subscriptions. That frees about ${aed(flagSum)} a month.\n• A long-term goal: grow the emergency fund from ${aed(CASH)} to six months of spending, about ${aed(Math.round(6*OUT/1000)*1000)}.\nTell me something like “save 20k in 12 months” and I will draft it for you.`;
   if (/scenario|explain this/.test(t)){ const sc = simulate(S), base = simulate(DEFAULTS); return `In the current scenario, the monthly cash position is ${sgn(sc.monthly)} ${CUR}, and median net worth in 10 years is ${aed(sc.p50[10])}, ${sc.p50[10] >= base.p50[10] ? 'above' : 'below'} the baseline by ${aed(Math.abs(sc.p50[10]-base.p50[10]))}. The shaded band shows the middle 80% of outcomes. It is a model, not a forecast.`; }
   if (/first|start|begin|where do i|overwhelm/.test(t)) return `Start with three things, in this order.\n\n1. ${pend.length ? `The ${pend[0].name} claim. It is waiting on ${pend[0].missing.length} document${pend[0].missing.length > 1 ? 's' : ''}. Once they are sent, the insurer’s timeline starts.` : 'Your claims are not waiting on any documents, so nothing is blocked there.'}\n2. Keep the ${main ? main.name.toLowerCase() : 'current account'} funded. Bills due in the next 7 days total ${aed(NEXT7)}, and the account holds ${aed(main ? main.bal : 0)}.\n3. Leave the investments alone for now. Nothing about them is urgent.\n\nEverything else can wait. Ask me about any of it whenever you like.`;
@@ -1787,7 +1927,8 @@ const CHIPS = {
   debt:['What is the insurance status?','What about the mortgage?'],
   goals:['How are my goals going?','Help me set a realistic goal','Set a challenge: no-spend weekends for 4 weeks'],
   scen:['Explain this scenario','Which subscriptions should I review?'],
-  plan:['Where do I start?','What is the insurance status?']
+  plan:['Where do I start?','What is the insurance status?'],
+  risk:['What is my biggest risk?','How do I fix the top risk?','Can we cover next month?']
 };
 function renderChips(){ $('drChips').innerHTML = (CHIPS[CURRENT] || CHIPS.home).map(c => `<button onclick="ask(this.textContent)">${esc(c)}</button>`).join(''); }
 function openHaven(q){
@@ -1840,7 +1981,7 @@ function renderDock(){
   const it = id => { const s = secOf(id); return `<button data-id="${id}" onclick="go('${id}')" aria-label="${s ? s.label : 'Home'}" class="ic">${IC[s ? s.i : 'home']}<span class="tip">${s ? s.label : 'Home'}</span></button>`; };
   $('dock').innerHTML = it('home') + `<span class="sep"></span>` + it('money') + it('invest') + it('debt')
     + `<button class="hv" onclick="openHaven()" aria-label="Ask Haven"><span class="o"></span><span class="o2"></span><span class="tip">Ask Haven · /</span></button>`
-    + it('goals') + it('scen') + it('plan');
+    + it('goals') + it('scen') + it('risk') + it('plan');
 }
 function refreshArcStats(){ if ($('arc')){ buildArc(); layoutArc(false); } renderHomeGoals(); }
 function go(id){
@@ -1853,7 +1994,8 @@ function go(id){
   window.scrollTo(0, 0);
   if (id === 'home' || id === 'invest') $('v-' + id).innerHTML = id === 'home' ? viewHome() : viewInvest();
   countUp($('v-' + id));
-  if (id === 'home'){ renderBrief(); buildArc(); requestAnimationFrame(() => { layoutArc(true); curve('accCurve', {gap:180, rot:20, max:2, start:0, dots:'accDots'}); }); renderHomeGoals(); }
+  if (id === 'risk'){ $('v-risk').innerHTML = viewRisk(); ackRisk(); }
+  if (id === 'home'){ renderBrief(); renderRiskAlert(); buildArc(); requestAnimationFrame(() => { layoutArc(true); curve('accCurve', {gap:180, rot:20, max:2, start:0, dots:'accDots'}); }); renderHomeGoals(); }
   if (id === 'goals') requestAnimationFrame(renderGoals);
   if (id === 'scen') renderScenResults();
   if (id === 'money') subSummary();
@@ -1882,12 +2024,14 @@ function init(){
   $('v-goals').innerHTML = viewGoals();
   $('v-scen').innerHTML = viewScen();
   $('v-plan').innerHTML = viewPlan();
+  $('v-risk').innerHTML = viewRisk();
   setFormKind('short');
   renderDock(); renderWhere();
   document.querySelector('.dr-inp button').innerHTML = IC.send;
   $('trust').innerHTML = [['Accounts', D.accounts.length + ' linked'], ['Bills & income', FLOWS.length + ' in 30d'], ['Subscriptions', D.subs.length], ['Holdings', D.holdings.length], ['Claims', D.claims.length], ['Goals', GOALS.length], ['Moves money', 'never'], ['Contacts anyone', 'never']]
     .map(([a,b]) => `<span>${a}<b>${b}</b></span>`).join('');
   $('meAv').textContent = D.user.name.charAt(0).toUpperCase(); $('meName').textContent = D.user.name; $('meRole').textContent = ROLE.charAt(0).toUpperCase() + ROLE.slice(1);
+  if (riskUnread()) D.notes.unshift({t:'Weekly foresight report ready', s:esc(RISK.headline) + '. Open Foresight to read it.', go:'risk', c:sev(RISK.top_severity).c});
   $('notes').innerHTML = '<h4>Haven noticed</h4>' + (D.notes.length ? '' : '<div class="note-i"><div><b>Nothing needs you right now</b></div></div>') + D.notes.map(x => `<div class="note-i" onclick="go('${x.go}')"><i style="background:${x.c}"></i><div><b>${esc(x.t)}</b><span>${esc(x.s)}</span></div></div>`).join('');
   $('bell').insertAdjacentHTML('afterbegin', IC.bell);
   $('bellCount').textContent = D.notes.length || '';

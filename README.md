@@ -31,11 +31,32 @@ The publishable key is meant to be shared. It only lets people sign in. The data
 | Agent activity | `activity_log`, written by the database and the market function |
 | Briefing and alerts | Worked out from the data: missing claim documents, the next 7 days of bills, flagged subscriptions, holdings over your guideline |
 | Goals and the 30-day plan | `goals`, `goal_logs`, `plan_items`, `plan_progress` |
+| Foresight (weekly risk report) | `risk_reports`, `risk_findings`, worked out from everything above |
 | Scenario presets | Built from your subscriptions, bank fees, debts, holdings and pending payouts |
 
 The scenario lab's starting assumptions come from the `households` row: `expected_return_pct`, `home_growth_pct`, and `fallback_volatility_pct` (used only until a year of price history exists; otherwise volatility is measured from your holdings' real monthly closes). The currency shown is the household's `currency`.
 
 The demo holdings are real tickers: VT, FUTU (Futu Holdings, a Chinese fintech broker listed in the US), BND, GLD and SGOV. Change `symbol` and `quantity` in `holdings` to your own. Finnhub's free plan covers US-listed symbols.
+
+## Foresight: the weekly risk report
+
+Every Monday Haven looks a week ahead and writes a report of the risks it can see forming.
+Each one says what is causing it, what it leads to if nothing changes, how severe it is, and
+what would change it. Where a fix can be modelled, the report shows what it would be worth
+over ten years and loads it straight into the Scenario lab.
+
+It currently watches for: bills due in the next week that are larger than the account they
+come from; spending above income; a thin emergency fund; debt at a high rate; a holding above
+your own guideline; flagged subscriptions; claim documents going overdue; goals that have
+fallen behind the pace they need; net worth falling month on month; and holdings with no live
+price (which makes every other figure understated).
+
+A new report raises an alert on the home page and in the bell. Opening Foresight clears it for
+the whole household. **Re-check now** rebuilds the report against your latest numbers.
+
+The analysis is deterministic, not a language model. Every figure in a report traces back to a
+row you can open, the same inputs always produce the same report, and nothing is sent to a
+third party. The report is written by the database itself, so it cannot be edited from a browser.
 
 ## Security
 - Row level security on every table, and no access at all without signing in.
@@ -46,7 +67,7 @@ The demo holdings are real tickers: VT, FUTU (Futu Holdings, a Chinese fintech b
 - An append-only audit log of every change.
 - The page pins supabase-js with a subresource-integrity hash and sets a Content-Security-Policy that only allows connections to Supabase.
 
-41 automated security tests cover this (`supabase test db`).
+52 automated tests cover this (`supabase test db`).
 
 ## For the owner: setting up the backend (about 10 minutes, all in the browser)
 
@@ -71,8 +92,14 @@ select private.schedule_market_refresh('https://<ref>.supabase.co/functions/v1/m
 ```
 Prices, FX and net-worth snapshots then refresh every 15 minutes even when nobody has the page open. Both values are stored in Vault, not in the job text.
 
+### 7. Weekly foresight reports
+`setup.sql` schedules them for Monday 06:00 if `pg_cron` is available. The dashboard also
+rebuilds a report that is more than a week old whenever someone opens it, so an idle household
+still gets one. Nothing extra to configure.
+
 ### Already ran an older setup.sql?
-Run [`upgrade-1.sql`](upgrade-1.sql) instead of setup.sql. It is safe to run more than once.
+Run [`upgrade-1.sql`](upgrade-1.sql), then [`upgrade-3.sql`](upgrade-3.sql) for the Foresight
+risk advisor. Both are safe to run more than once.
 Its last line — the `schedule_market_refresh` call — is left commented out on purpose: run it
 separately, on its own, with your project ref and your real `CRON_SECRET` filled in. The SQL
 Editor runs a pasted script as one transaction, so a bad value there would roll back the whole
